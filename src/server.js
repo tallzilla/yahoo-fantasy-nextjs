@@ -4,12 +4,14 @@ const http = require("http");
 const next = require("next");
 const session = require("express-session");
 const passport = require("passport");
-const OAuth2Strategy = require("passport-oauth2");
 const uid = require("uid-safe");
 const authRoutes = require("./routes/auth-routes");
 const YahooFantasy = require('yahoo-fantasy');
 const request = require("request");
 const dev = process.env.NODE_ENV !== "production";
+const YahooStrategy = require("passport-yahoo-oauth2").Strategy;
+const cryptoRandomString = require('crypto-random-string');
+
 const app = next({
   dev,
   dir: "./src"
@@ -17,61 +19,28 @@ const app = next({
 
 const handle = app.getRequestHandler();
 
+
 app.prepare().then(() => {
   const server = express();
 
-  const sessionConfig = {
-    secret: uid.sync(18),
-    cookie: {
-      maxAge: 86400 * 1000
-    },
-    resave: false,
-    saveUninitialized: true
-  };
-  server.use(session(sessionConfig));
-
-  const YahooStrategy = new OAuth2Strategy(
-    {
-      authorizationURL: process.env.YAHOO_AUTH_URL,
-      tokenURL: process.env.YAHOO_TOKEN_URL,
+  const yahooStrategy = new YahooStrategy({
       clientID: process.env.YAHOO_CLIENT_ID,
       clientSecret: process.env.YAHOO_CLIENT_SECRET,
       callbackURL: process.env.YAHOO_CALLBACK_URL,
+      scope: "openid,fspt-r",
+      noonce: cryptoRandomString({length: 10, type: 'url-safe'}),
+      passReqtoCallback: true
     },
-
-    function(accessToken, refreshToken, params, profile, done) {
-      var options = {
-        url:
-          'https://social.yahooapis.com/v1/user/' +
-          params.xoauth_yahoo_guid +
-          '/profile?format=json',
-        method: 'get',
-        json: true,
-        auth: {
-          bearer: accessToken
-        }
-      };
-
-      request(options, function(error, response, body) {
-        if (!error && response.statusCode == 200) {
-          var userObj = {
-            id: body.profile.guiid,
-            name: body.profile.nickname,
-            avatar: body.profile.image.imageUrl,
-            memberSince: body.profile.memberSince,
-            accessToken: accessToken,
-            refreshToken: refreshToken,
-          };
-
-          server.yf.setUserToken(accessToken);
-
-          return done(null, userObj);
-        }
+    function(token, tokenSecret, profile, done) {
+      User.findOrCreate({
+        yahooId: profile.id
+      }, function(err, user) {
+        return done(err, user);
       });
     }
-  )
+  );
 
-  passport.use(YahooStrategy);
+  passport.use(yahooStrategy);
   passport.serializeUser((user, done) => done(null, user));
   passport.deserializeUser((user, done) => done(null, user));
 
@@ -90,24 +59,24 @@ app.prepare().then(() => {
 
   server.get('/api/games', function(req, res) {
     server.yf.user.games()
-    .then(function(response) {
-      const games = res.json(response.games);
-      return(games);
-    })
-    .catch(function (error) {
-      console.log('server error getting user games', error)
-    })
+      .then(function(response) {
+        const games = res.json(response.games);
+        return (games);
+      })
+      .catch(function(error) {
+        console.log('server error getting user games', error)
+      })
   })
 
   server.get('/api/teams/:game_key', function(req, res) {
     server.yf.teams.games(req.params.game_key)
-    .then(function(response) {
-      const teams = res.json(response);
-      return(teams);
-    })
-    .catch(function (error) {
-      console.log('server error getting user teams', error)
-    })
+      .then(function(response) {
+        const teams = res.json(response);
+        return (teams);
+      })
+      .catch(function(error) {
+        console.log('server error getting user teams', error)
+      })
   })
 
   server.get("*", handle);
@@ -115,4 +84,5 @@ app.prepare().then(() => {
   http.createServer(server).listen(process.env.PORT, () => {
     console.log(`listening on port ${process.env.PORT}`);
   });
+
 });
